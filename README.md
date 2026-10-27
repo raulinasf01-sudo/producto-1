@@ -6,7 +6,7 @@
 **Bloque asignado:** `172.24.0.0/15` | `2001:25:24::/48`
 
 
-| Link Video | `https://www.youtube.com/playlist?list=PLGnmmpX8-gZ8`
+| Link Video | (https://www.youtube.com/playlist?list=PLGnmmpX8-gZ8)
 
 Red confiable, segura y escalable para una mediana empresa con segmentación por
 departamentos (VLANs), VTP, EtherChannel, STP rápido, HSRP, OSPF multiárea y ACLs.
