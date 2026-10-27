@@ -1,0 +1,776 @@
+!=====================================================================
+! ITLA - TI-203 - PRODUCTO 1 - EQUIPO 5   (VERSION 2: switches CAPA 2)
+! Bloque: 172.24.0.0/15 | 2001:25:24::/48
+!
+! CAMBIO DE DISENO
+!  - SWM1, SWM2, SWAC1-3, SWA13 y SW son capa 2 (sin SVIs de gateway).
+!  - Los gateways de las VLAN estan en R1-Core con subinterfaces
+!    (router-on-a-stick) y en R2.
+!  - Balanceo por VLAN entre los dos enlaces de R1-Core:
+!        R1 e0/0 -> SWM1 : VLAN 10 y 30  (SWM1 es root de 10/30)
+!        R1 e0/1 -> SWM2 : VLAN 20 y 40  (SWM2 es root de 20/40)
+!  - HSRP queda configurado en cada subinterfaz (VIP .1 / real .2),
+!    pero con UN solo router en R1 NO hay failover real: hace falta un
+!    segundo router para que el HSRP tenga par (ver nota final).
+!  - Ya no se usan las /30 R1-SWM1 y R1-SWM2.
+!
+! ORDEN: 1) SWM1, SWM2  2) SWAC1-3, SWA13, SW  3) R1-Core, R2
+!        4) esperar VTP  5) ACLs al final
+!=====================================================================
+
+
+!#####################################################################
+!                          SWM1  (L2, VTP server, root VLAN 10/30)
+!#####################################################################
+hostname SWM1
+no ip domain-lookup
+ip domain-name itla.local
+username admin privilege 15 secret ITLA-E5
+enable secret ITLA-E5
+service password-encryption
+line con 0
+ logging synchronous
+ exec-timeout 0 0
+line vty 0 4
+ login local
+ transport input ssh telnet
+exit
+crypto key generate rsa modulus 2048
+
+vtp version 2
+vtp domain ITLA-E5-R1
+vtp mode server
+vtp password ITLA-E5
+vlan 10
+ name Estudiantes
+vlan 20
+ name Docentes
+vlan 30
+ name Gestion
+vlan 40
+ name Voz
+vlan 999
+ name Blackhull
+exit
+
+spanning-tree mode rapid-pvst
+spanning-tree vlan 10,30 root primary
+spanning-tree vlan 20,40 root secondary
+
+! ---- EtherChannel Po1 hacia SWM2 (LACP) ----
+interface range Ethernet0/1 - 3
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ channel-group 1 mode active
+ no shutdown
+interface Port-channel1
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+
+! ---- Trunk hacia R1-Core (solo VLAN 10 y 30) ----
+interface Ethernet0/0
+ description Trunk a R1-Core e0/0
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,30
+ no shutdown
+
+! ---- Trunks hacia switches de acceso ----
+interface Ethernet1/0
+ description Trunk a SWAC1 e0/0
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+interface Ethernet1/1
+ description Trunk a SWAC2 e0/0
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+interface Ethernet1/2
+ description Trunk a SWAC3 e0/0
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+
+! ---- Gestion ----
+interface Vlan30
+ ip address 172.24.10.4 255.255.255.192
+ no shutdown
+ip default-gateway 172.24.10.1
+
+interface range Ethernet1/3 , Ethernet2/0 - 3 , Ethernet3/0 - 3
+ switchport mode access
+ switchport access vlan 999
+ shutdown
+end
+write memory
+
+
+!#####################################################################
+!                          SWM2  (L2, VTP server, root VLAN 20/40)
+!#####################################################################
+hostname SWM2
+no ip domain-lookup
+ip domain-name itla.local
+username admin privilege 15 secret ITLA-E5
+enable secret ITLA-E5
+service password-encryption
+line con 0
+ logging synchronous
+ exec-timeout 0 0
+line vty 0 4
+ login local
+ transport input ssh telnet
+exit
+crypto key generate rsa modulus 2048
+
+vtp version 2
+vtp domain ITLA-E5-R1
+vtp mode server
+vtp password ITLA-E5
+
+spanning-tree mode rapid-pvst
+spanning-tree vlan 20,40 root primary
+spanning-tree vlan 10,30 root secondary
+
+interface range Ethernet0/1 - 3
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ channel-group 1 mode active
+ no shutdown
+interface Port-channel1
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+
+! ---- Trunk hacia R1-Core (solo VLAN 20 y 40) ----
+interface Ethernet0/0
+ description Trunk a R1-Core e0/1
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 20,40
+ no shutdown
+
+interface Ethernet1/0
+ description Trunk a SWAC1 e0/1
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+interface Ethernet1/1
+ description Trunk a SWAC2 e0/1
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+interface Ethernet1/2
+ description Trunk a SWAC3 e0/1
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+
+interface Vlan30
+ ip address 172.24.10.5 255.255.255.192
+ no shutdown
+ip default-gateway 172.24.10.1
+
+interface range Ethernet1/3 , Ethernet2/0 - 3 , Ethernet3/0 - 3
+ switchport mode access
+ switchport access vlan 999
+ shutdown
+end
+write memory
+
+
+!#####################################################################
+!                          SWAC1  (acceso Docentes, VLAN 20)
+!#####################################################################
+hostname SWAC1
+no ip domain-lookup
+ip domain-name itla.local
+username admin privilege 15 secret ITLA-E5
+enable secret ITLA-E5
+service password-encryption
+line con 0
+ logging synchronous
+ exec-timeout 0 0
+line vty 0 4
+ login local
+ transport input ssh telnet
+exit
+crypto key generate rsa modulus 2048
+
+vtp version 2
+vtp domain ITLA-E5-R1
+vtp mode client
+vtp password ITLA-E5
+spanning-tree mode rapid-pvst
+
+interface Ethernet0/0
+ description Trunk a SWM1 e1/0
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+interface Ethernet0/1
+ description Trunk a SWM2 e1/0
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+interface Ethernet1/0
+ description DOC1
+ switchport mode access
+ switchport access vlan 20
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ no shutdown
+
+interface Vlan30
+ ip address 172.24.10.11 255.255.255.192
+ no shutdown
+ip default-gateway 172.24.10.1
+
+interface range Ethernet0/2 - 3 , Ethernet1/1 - 3 , Ethernet2/0 - 3 , Ethernet3/0 - 3
+ switchport mode access
+ switchport access vlan 999
+ shutdown
+end
+write memory
+
+
+!#####################################################################
+!                          SWAC2  (acceso Estudiantes, VLAN 10)
+!#####################################################################
+hostname SWAC2
+no ip domain-lookup
+ip domain-name itla.local
+username admin privilege 15 secret ITLA-E5
+enable secret ITLA-E5
+service password-encryption
+line con 0
+ logging synchronous
+ exec-timeout 0 0
+line vty 0 4
+ login local
+ transport input ssh telnet
+exit
+crypto key generate rsa modulus 2048
+
+vtp version 2
+vtp domain ITLA-E5-R1
+vtp mode client
+vtp password ITLA-E5
+spanning-tree mode rapid-pvst
+
+interface Ethernet0/0
+ description Trunk a SWM1 e1/1
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+interface Ethernet0/1
+ description Trunk a SWM2 e1/1
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+interface Ethernet2/0
+ description EST1
+ switchport mode access
+ switchport access vlan 10
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ no shutdown
+
+interface Vlan30
+ ip address 172.24.10.12 255.255.255.192
+ no shutdown
+ip default-gateway 172.24.10.1
+
+interface range Ethernet0/2 - 3 , Ethernet1/0 - 3 , Ethernet2/1 - 3 , Ethernet3/0 - 3
+ switchport mode access
+ switchport access vlan 999
+ shutdown
+end
+write memory
+
+
+!#####################################################################
+!                          SWAC3  (acceso Gestion, VLAN 30)
+!#####################################################################
+hostname SWAC3
+no ip domain-lookup
+ip domain-name itla.local
+username admin privilege 15 secret ITLA-E5
+enable secret ITLA-E5
+service password-encryption
+line con 0
+ logging synchronous
+ exec-timeout 0 0
+line vty 0 4
+ login local
+ transport input ssh telnet
+exit
+crypto key generate rsa modulus 2048
+
+vtp version 2
+vtp domain ITLA-E5-R1
+vtp mode client
+vtp password ITLA-E5
+spanning-tree mode rapid-pvst
+
+interface Ethernet0/0
+ description Trunk a SWM1 e1/2
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+interface Ethernet0/1
+ description Trunk a SWM2 e1/2
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+ no shutdown
+interface Ethernet3/0
+ description GES1
+ switchport mode access
+ switchport access vlan 30
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ no shutdown
+
+interface Vlan30
+ ip address 172.24.10.13 255.255.255.192
+ no shutdown
+ip default-gateway 172.24.10.1
+
+interface range Ethernet0/2 - 3 , Ethernet1/0 - 3 , Ethernet2/0 - 3 , Ethernet3/1 - 3
+ switchport mode access
+ switchport access vlan 999
+ shutdown
+end
+write memory
+
+
+!#####################################################################
+!        R1-Core  (gateways VLAN 10/20/30/40, HSRP, OSPF area 0, NAT)
+!#####################################################################
+hostname R1-Core
+no ip domain-lookup
+ip domain-name itla.local
+username admin privilege 15 secret ITLA-E5
+enable secret ITLA-E5
+service password-encryption
+line con 0
+ logging synchronous
+ exec-timeout 0 0
+line vty 0 4
+ login local
+ transport input ssh telnet
+exit
+crypto key generate rsa modulus 2048
+
+ipv6 unicast-routing
+
+! ================= e0/0 -> SWM1 : VLAN 10 y 30 =================
+interface Ethernet0/0
+ description Trunk a SWM1 e0/0
+ no ip address
+ no shutdown
+interface Ethernet0/0.10
+ description Estudiantes
+ encapsulation dot1Q 10
+ ip address 172.24.0.2 255.255.248.0
+ ipv6 address 2001:25:24:0::2/64
+ ipv6 ospf 1 area 0
+ ip nat inside
+ standby version 2
+ standby 10 ip 172.24.0.1
+ standby 10 priority 110
+ standby 10 preempt
+ standby 110 ipv6 autoconfig
+ standby 110 priority 110
+ standby 110 preempt
+interface Ethernet0/0.30
+ description Gestion
+ encapsulation dot1Q 30
+ ip address 172.24.10.2 255.255.255.192
+ ipv6 address 2001:25:24:4::2/64
+ ipv6 ospf 1 area 0
+ ip nat inside
+ standby version 2
+ standby 30 ip 172.24.10.1
+ standby 30 priority 110
+ standby 30 preempt
+ standby 130 ipv6 autoconfig
+ standby 130 priority 110
+ standby 130 preempt
+
+! ================= e0/1 -> SWM2 : VLAN 20 y 40 =================
+interface Ethernet0/1
+ description Trunk a SWM2 e0/0
+ no ip address
+ no shutdown
+interface Ethernet0/1.20
+ description Docentes
+ encapsulation dot1Q 20
+ ip address 172.24.8.2 255.255.255.0
+ ipv6 address 2001:25:24:1::2/64
+ ipv6 ospf 1 area 0
+ ip nat inside
+ standby version 2
+ standby 20 ip 172.24.8.1
+ standby 20 priority 110
+ standby 20 preempt
+ standby 120 ipv6 autoconfig
+ standby 120 priority 110
+ standby 120 preempt
+interface Ethernet0/1.40
+ description Voz
+ encapsulation dot1Q 40
+ ip address 172.24.10.130 255.255.255.224
+ ipv6 address 2001:25:24:6::2/64
+ ipv6 ospf 1 area 0
+ ip nat inside
+ standby version 2
+ standby 40 ip 172.24.10.129
+ standby 40 priority 110
+ standby 40 preempt
+ standby 140 ipv6 autoconfig
+ standby 140 priority 110
+ standby 140 preempt
+
+! ================= ISP y P2P =================
+interface Ethernet0/2
+ description a ISP
+ ip address 172.24.10.197 255.255.255.252
+ ipv6 address 2001:25:24:A::1/64
+ ip nat outside
+ no shutdown
+interface Serial1/0
+ description P2P a R2 s1/0
+ ip address 172.24.10.193 255.255.255.252
+ ipv6 address 2001:25:24:9::1/126
+ ipv6 ospf 1 area 0
+ ip nat inside
+ no shutdown
+
+ip route 0.0.0.0 0.0.0.0 172.24.10.198
+ipv6 route ::/0 2001:25:24:A::2
+
+! ---- NAT (Voz queda sin Internet) ----
+ip access-list standard NAT-INET
+ deny 172.24.10.128 0.0.0.31
+ permit 172.24.0.0 0.1.255.255
+ip nat inside source list NAT-INET interface Ethernet0/2 overload
+
+! ---- OSPF (subinterfaces pasivas, solo el P2P forma vecino) ----
+router ospf 1
+ router-id 1.1.1.1
+ passive-interface default
+ no passive-interface Serial1/0
+ network 172.24.10.192 0.0.0.3 area 0
+ network 172.24.0.0 0.0.7.255 area 0
+ network 172.24.8.0 0.0.0.255 area 0
+ network 172.24.10.0 0.0.0.63 area 0
+ network 172.24.10.128 0.0.0.31 area 0
+ default-information originate
+ipv6 router ospf 1
+ router-id 1.1.1.1
+ passive-interface default
+ no passive-interface Serial1/0
+ default-information originate
+end
+write memory
+
+
+!#####################################################################
+!                          R2  (ABR: area 0 + area 1 stub)
+!#####################################################################
+hostname R2
+no ip domain-lookup
+ip domain-name itla.local
+username admin privilege 15 secret ITLA-E5
+enable secret ITLA-E5
+service password-encryption
+line con 0
+ logging synchronous
+ exec-timeout 0 0
+line vty 0 4
+ login local
+ transport input ssh telnet
+exit
+crypto key generate rsa modulus 2048
+
+ipv6 unicast-routing
+
+ipv6 dhcp pool STATELESS-R2
+ dns-server 2001:4860:4860::8888
+ domain-name itla.local
+
+interface Serial1/0
+ description P2P a R1-Core s1/0
+ ip address 172.24.10.194 255.255.255.252
+ ipv6 address 2001:25:24:9::2/126
+ ipv6 ospf 1 area 0
+ no shutdown
+
+interface Ethernet0/0
+ description Trunk a SWA13 e0/0
+ no ip address
+ no shutdown
+interface Ethernet0/0.50
+ description Finanzas
+ encapsulation dot1Q 50
+ ip address 172.24.9.1 255.255.255.128
+ ipv6 address 2001:25:24:2::1/64
+ ipv6 nd other-config-flag
+ ipv6 dhcp server STATELESS-R2
+ ipv6 ospf 1 area 1
+interface Ethernet0/0.60
+ description Academicos
+ encapsulation dot1Q 60
+ ip address 172.24.9.129 255.255.255.128
+ ipv6 address 2001:25:24:3::1/64
+ ipv6 nd other-config-flag
+ ipv6 dhcp server STATELESS-R2
+ ipv6 ospf 1 area 1
+
+interface Ethernet0/1
+ description Datacenter (SW e0/0)
+ ip address 172.24.10.65 255.255.255.192
+ ipv6 address 2001:25:24:5::1/64
+ ipv6 ospf 1 area 1
+ no shutdown
+
+router ospf 1
+ router-id 2.2.2.2
+ passive-interface default
+ no passive-interface Serial1/0
+ network 172.24.10.192 0.0.0.3 area 0
+ network 172.24.9.0 0.0.0.255 area 1
+ network 172.24.10.64 0.0.0.63 area 1
+ area 1 stub
+ipv6 router ospf 1
+ router-id 2.2.2.2
+ passive-interface default
+ no passive-interface Serial1/0
+ area 1 stub
+end
+write memory
+
+
+!#####################################################################
+!                          SWA13  (L2, VTP server dominio R2)
+!#####################################################################
+hostname SWA13
+no ip domain-lookup
+enable secret ITLA-E5
+service password-encryption
+line con 0
+ logging synchronous
+ exec-timeout 0 0
+
+vtp version 2
+vtp domain ITLA-E5-R2
+vtp mode server
+vtp password ITLA-E5
+vlan 50
+ name Finanzas
+vlan 60
+ name Academicos
+vlan 999
+ name Blackhull
+exit
+
+spanning-tree mode rapid-pvst
+
+interface Ethernet0/0
+ description Trunk a R2 e0/0
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 50,60
+ no shutdown
+interface Ethernet1/0
+ description VPC11 (Finanzas)
+ switchport mode access
+ switchport access vlan 50
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ no shutdown
+interface Ethernet2/0
+ description VPC12 (Academicos)
+ switchport mode access
+ switchport access vlan 60
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ no shutdown
+
+interface range Ethernet0/1 - 3 , Ethernet1/1 - 3 , Ethernet2/1 - 3 , Ethernet3/0 - 3
+ switchport mode access
+ switchport access vlan 999
+ shutdown
+end
+write memory
+
+
+!#####################################################################
+!                          SW  (L2, Datacenter, VTP transparente)
+!#####################################################################
+! SW solo se conecta a R2 (sin trunk con SWA13): VTP transparente
+! con la VLAN 70 local.
+hostname SW
+no ip domain-lookup
+enable secret ITLA-E5
+service password-encryption
+line con 0
+ logging synchronous
+ exec-timeout 0 0
+
+vtp version 2
+vtp domain ITLA-E5-R2
+vtp mode transparent
+vtp password ITLA-E5
+vlan 70
+ name Datacenter
+vlan 999
+ name Blackhull
+exit
+
+spanning-tree mode rapid-pvst
+
+interface Ethernet0/0
+ description a R2 e0/1
+ switchport mode access
+ switchport access vlan 70
+ no shutdown
+interface Ethernet0/1
+ description SERVICIOS
+ switchport mode access
+ switchport access vlan 70
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ no shutdown
+
+interface range Ethernet0/2 - 3 , Ethernet1/0 - 3 , Ethernet2/0 - 3 , Ethernet3/0 - 3
+ switchport mode access
+ switchport access vlan 999
+ shutdown
+end
+write memory
+
+
+!#####################################################################
+!                          HOSTS (VPCS / servidor)
+!#####################################################################
+! DOC1   (VLAN 20)
+ip 172.24.8.10/24 172.24.8.1
+ip 2001:25:24:1::10/64
+save
+! EST1   (VLAN 10)
+ip 172.24.0.10/21 172.24.0.1
+ip 2001:25:24:0::10/64
+save
+! GES1   (VLAN 30)
+ip 172.24.10.10/26 172.24.10.1
+ip 2001:25:24:4::10/64
+save
+! VPC11  (VLAN 50 Finanzas)
+ip 172.24.9.10/25 172.24.9.1
+ip 2001:25:24:2::10/64
+save
+! VPC12  (VLAN 60 Academicos)
+ip 172.24.9.138/25 172.24.9.129
+ip 2001:25:24:3::10/64
+save
+! SERVICIOS (Datacenter)  IP 172.24.10.70/26  GW 172.24.10.65
+!                         IPv6 2001:25:24:5::10/64  GW 2001:25:24:5::1
+
+
+!#####################################################################
+!                    SPRINT 3 - ACLs (aplicar al final)
+!#####################################################################
+! POLITICA:
+!  - Estudiantes: sin acceso a Gestion, Finanzas, Docentes ni Voz.
+!  - Docentes:    sin acceso a Finanzas ni Gestion.
+!  - Finanzas:    sin acceso a Estudiantes, Docentes ni Gestion.
+!  - Academicos:  sin acceso a Gestion.
+!  - Voz:         solo Voz y Datacenter; sin Internet (ver NAT).
+!  - Datacenter:  Estudiantes solo ICMP echo, HTTP y HTTPS.
+!  - VTY: solo desde Gestion (172.24.10.0/26).
+
+!----- R1-Core (ahora las ACL van en las subinterfaces) -----
+ip access-list extended ACL-EST-IN
+ deny ip 172.24.0.0 0.0.7.255 172.24.10.0 0.0.0.63
+ deny ip 172.24.0.0 0.0.7.255 172.24.9.0 0.0.0.127
+ deny ip 172.24.0.0 0.0.7.255 172.24.8.0 0.0.0.255
+ deny ip 172.24.0.0 0.0.7.255 172.24.10.128 0.0.0.31
+ permit ip any any
+ip access-list extended ACL-DOC-IN
+ deny ip 172.24.8.0 0.0.0.255 172.24.9.0 0.0.0.127
+ deny ip 172.24.8.0 0.0.0.255 172.24.10.0 0.0.0.63
+ permit ip any any
+ip access-list extended ACL-VOZ-IN
+ permit udp any host 224.0.0.102 eq 1985
+ permit ip 172.24.10.128 0.0.0.31 172.24.10.128 0.0.0.31
+ permit ip 172.24.10.128 0.0.0.31 172.24.10.64 0.0.0.63
+ deny ip any any
+interface Ethernet0/0.10
+ ip access-group ACL-EST-IN in
+interface Ethernet0/1.20
+ ip access-group ACL-DOC-IN in
+interface Ethernet0/1.40
+ ip access-group ACL-VOZ-IN in
+
+!----- R2 -----
+ip access-list extended ACL-FIN-IN
+ deny ip 172.24.9.0 0.0.0.127 172.24.0.0 0.0.7.255
+ deny ip 172.24.9.0 0.0.0.127 172.24.8.0 0.0.0.255
+ deny ip 172.24.9.0 0.0.0.127 172.24.10.0 0.0.0.63
+ permit ip any any
+ip access-list extended ACL-ACA-IN
+ deny ip 172.24.9.128 0.0.0.127 172.24.10.0 0.0.0.63
+ permit ip any any
+ip access-list extended ACL-DC-OUT
+ permit icmp 172.24.0.0 0.0.7.255 172.24.10.64 0.0.0.63 echo
+ permit tcp 172.24.0.0 0.0.7.255 172.24.10.64 0.0.0.63 eq 80
+ permit tcp 172.24.0.0 0.0.7.255 172.24.10.64 0.0.0.63 eq 443
+ deny ip 172.24.0.0 0.0.7.255 172.24.10.64 0.0.0.63
+ permit ip any any
+interface Ethernet0/0.50
+ ip access-group ACL-FIN-IN in
+interface Ethernet0/0.60
+ ip access-group ACL-ACA-IN in
+interface Ethernet0/1
+ ip access-group ACL-DC-OUT out
+
+!----- ACL ESTANDAR para VTY (R1-Core, R2, SWM1, SWM2, SWAC1-3) -----
+access-list 10 permit 172.24.10.0 0.0.0.63
+line vty 0 4
+ access-class 10 in
+
+
+!#####################################################################
+!                    VERIFICACION / SCRIPTS DE PRUEBA
+!#####################################################################
+! L2:   show vtp status | show vlan brief | show interfaces trunk
+!       show etherchannel summary | show spanning-tree summary
+!       show spanning-tree vlan 10 (root = SWM1) / vlan 20 (root = SWM2)
+! R1:   show ip interface brief | show standby brief
+! OSPF: show ip ospf neighbor | show ip route ospf | show ip ospf database
+!       show ipv6 ospf neighbor | show ipv6 route ospf
+! Failover L2: shutdown de SWM1 e1/0 o de un puerto del Po1 -> ping
+!       continuo desde EST1 (ping 172.24.10.70 -t) y medir perdida.
+! Conectividad (esperado):
+!   GES1  -> todos          : OK
+!   DOC1  -> VPC12, SERVICIOS : OK ; DOC1 -> VPC11, GES1 : BLOQUEADO
+!   EST1  -> SERVICIOS ping/80/443 : OK ; EST1 -> GES1, VPC11, DOC1 : BLOQUEADO
+!   VPC11 -> SERVICIOS      : OK ; VPC11 -> EST1/DOC1/GES1 : BLOQUEADO
+!   VPC12 -> GES1           : BLOQUEADO
+! ACLs: show access-lists | show ip interface e0/0.10
